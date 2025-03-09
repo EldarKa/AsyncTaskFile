@@ -1,4 +1,6 @@
 ﻿using System.IO;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 
 namespace AsyncTaskFile
@@ -24,8 +26,11 @@ namespace AsyncTaskFile
             {
                 try
                 {
-                    string content = File.ReadAllText(filePath, Encoding.UTF8);
-                    Console.WriteLine($"{Path.GetFileName(filePath)}: {content}");
+                    using (StreamReader reader = new StreamReader(filePath, Encoding.UTF8))
+                    {
+                        string content = reader.ReadToEnd();
+                        Console.WriteLine($"{Path.GetFileName(filePath)}: {content}");
+                    }
                 }
                 catch (FileNotFoundException)
                 {
@@ -53,7 +58,24 @@ namespace AsyncTaskFile
                 try
                 {
                     // Создаёт или перезаписывает файл
-                    await File.WriteAllTextAsync(filePath, $"{Path.GetFileName(filePath)}: {DateTime.Now}\n", Encoding.UTF8);
+                    if (DirectoryHasPermission(filePath))
+                    {
+                        using (StreamWriter writer = new StreamWriter(filePath, false, Encoding.UTF8))
+                        {
+                            await writer.WriteLineAsync(Path.GetFileName(filePath));
+                        }
+
+                        // Дозаписываем текущую дату
+                        using (StreamWriter writer = new StreamWriter(filePath, true, Encoding.UTF8))
+                        {
+                            await writer.WriteLineAsync(DateTime.Now.ToString());
+                        }
+
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Нет прав на запись: {filePath}");
+                    }
                 }
                 catch (UnauthorizedAccessException)
                 {
@@ -64,6 +86,34 @@ namespace AsyncTaskFile
                     Console.WriteLine($"Ошибка ввода-вывода: {filePath} - {ex.Message}");
                 }
             }
+        }
+
+        static bool DirectoryHasPermission(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath)) return false;
+
+            try
+            {
+                DirectoryInfo dirInfo = new DirectoryInfo(filePath);
+                AuthorizationRuleCollection rules = dirInfo.GetAccessControl().GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier)); ;
+                WindowsIdentity identity = WindowsIdentity.GetCurrent();
+                WindowsPrincipal principal = new WindowsPrincipal(identity);
+
+                foreach (FileSystemAccessRule rule in rules)
+                {
+                    if (rule.AccessControlType == AccessControlType.Allow &&
+                        principal.IsInRole(rule.IdentityReference.Value) &&
+                        (rule.FileSystemRights & FileSystemRights.WriteData) == FileSystemRights.WriteData)
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка проверки прав доступа: {ex.Message}");
+            }
+            return false;
         }
     }
 }
